@@ -272,9 +272,9 @@ class ParsableContext(ConversationContext):
         self.num_prompt_tokens = 0
         self.num_output_tokens = 0
         self.num_cached_tokens = 0
-        # TODO: num_reasoning_tokens is not implemented yet.
         self.num_reasoning_tokens = 0
         self.num_tool_output_tokens = 0
+        self._accumulated_token_ids: list[int] = []
         self.all_turn_metrics: list[TurnMetrics] = []
         self.current_turn_metrics = TurnMetrics()
         self.is_first_turn = True
@@ -348,6 +348,7 @@ class ParsableContext(ConversationContext):
         self.num_output_tokens += delta_tokens
         self.current_turn_metrics.output_tokens += delta_tokens
         self.parser.process(output.outputs[0])
+        self._accumulated_token_ids.extend(output.outputs[0].token_ids or [])
 
         if output.finished:
             self.all_turn_metrics.append(self.current_turn_metrics.copy())

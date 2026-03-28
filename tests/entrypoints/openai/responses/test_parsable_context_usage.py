@@ -59,6 +59,7 @@ def _make_parsable_context():
         ctx.num_cached_tokens = 0
         ctx.num_reasoning_tokens = 0
         ctx.num_tool_output_tokens = 0
+        ctx._accumulated_token_ids = []
         ctx.all_turn_metrics = []
         ctx.current_turn_metrics = TurnMetrics()
         ctx.is_first_turn = True
