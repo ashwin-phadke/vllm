@@ -274,8 +274,11 @@ class ParsableContext(ConversationContext):
         self.num_cached_tokens = 0
         # TODO: num_reasoning_tokens is not implemented yet.
         self.num_reasoning_tokens = 0
-        # not implemented yet for ParsableContext
+        self.num_tool_output_tokens = 0
         self.all_turn_metrics: list[TurnMetrics] = []
+        self.current_turn_metrics = TurnMetrics()
+        self.is_first_turn = True
+        self._is_first_call_of_turn = True
 
         if reasoning_parser_cls is None:
             raise ValueError("reasoning_parser_cls must be provided.")
@@ -305,10 +308,51 @@ class ParsableContext(ConversationContext):
         self.output_messages: list[ResponseRawMessageAndToken] = []
 
     def append_output(self, output: RequestOutput) -> None:
-        self.num_prompt_tokens = len(output.prompt_token_ids or [])
-        self.num_cached_tokens = output.num_cached_tokens or 0
-        self.num_output_tokens += len(output.outputs[0].token_ids or [])
+        # Update prompt/cache tokens only once per turn (on the first streaming
+        # chunk of each turn), then compute tool output tokens for turns > 1.
+        if self._is_first_call_of_turn:
+            this_turn_input_tokens = len(output.prompt_token_ids or [])
+            self.current_turn_metrics.input_tokens = this_turn_input_tokens
+            self.num_prompt_tokens += this_turn_input_tokens
+
+            if self.is_first_turn:
+                self.is_first_turn = False
+            else:
+                previous_turn = self.all_turn_metrics[-1]
+                this_turn_tool_tokens = (
+                    this_turn_input_tokens
+                    - previous_turn.input_tokens
+                    - previous_turn.output_tokens
+                )
+                if this_turn_tool_tokens < 0:
+                    logger.error(
+                        "Negative tool output tokens calculated: %d "
+                        "(current_input=%d, previous_input=%d, "
+                        "previous_output=%d). Setting to 0.",
+                        this_turn_tool_tokens,
+                        this_turn_input_tokens,
+                        previous_turn.input_tokens,
+                        previous_turn.output_tokens,
+                    )
+                    this_turn_tool_tokens = 0
+                self.num_tool_output_tokens += this_turn_tool_tokens
+                self.current_turn_metrics.tool_output_tokens = this_turn_tool_tokens
+
+            num_cached = output.num_cached_tokens or 0
+            self.num_cached_tokens += num_cached
+            self.current_turn_metrics.cached_input_tokens = num_cached
+
+            self._is_first_call_of_turn = False
+
+        delta_tokens = len(output.outputs[0].token_ids or [])
+        self.num_output_tokens += delta_tokens
+        self.current_turn_metrics.output_tokens += delta_tokens
         self.parser.process(output.outputs[0])
+
+        if output.finished:
+            self.all_turn_metrics.append(self.current_turn_metrics.copy())
+            self.current_turn_metrics.reset()
+            self._is_first_call_of_turn = True
 
         # only store if enable_response_messages is True, save memory
         if self.request.enable_response_messages:
